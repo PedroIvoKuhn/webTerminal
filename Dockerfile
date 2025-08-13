@@ -6,6 +6,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     openmpi-bin \
     sudo \
+    git \
+    curl \
+    wget \
+    iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 # Garante que mpiuser terá sempre o ID de usuário 1000 e grupo 1000
