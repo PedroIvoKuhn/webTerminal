@@ -9,14 +9,16 @@ kind: Role
 metadata:
   name: terminal-pod-manager
 rules:
-  - apiGroups: [""] # "" indica a API core
-    resources: ["pods"]
-    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""] # API Core
+    # Adicionamos "secrets" aqui
+    resources: ["pods", "services", "secrets"]
+    verbs: ["create", "get", "list", "delete", "deletecollection"]
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create", "get"]
 
 ---
+# ... (o RoleBinding continua o mesmo)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -24,7 +26,7 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: terminal-backend-sa
-    namespace: default # ou o namespace que estiver usando
+    namespace: default
 roleRef:
   kind: Role
   name: terminal-pod-manager
