@@ -9,8 +9,7 @@ kind: Role
 metadata:
   name: terminal-pod-manager
 rules:
-  - apiGroups: [""] # API Core
-    # Adicionamos "secrets" aqui
+  - apiGroups: [""]
     resources: ["pods", "services", "secrets"]
     verbs: ["create", "get", "list", "delete", "deletecollection"]
   - apiGroups: [""]
@@ -18,7 +17,6 @@ rules:
     verbs: ["create", "get"]
 
 ---
-# ... (o RoleBinding continua o mesmo)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:

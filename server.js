@@ -198,7 +198,7 @@ io.on('connection', (socket) => {
             for (let i = 1; i < numMachines; i++) {
                 machineAliases.push(`worker-${i}`);
             }
-            // 2. Enviamos o novo evento 'session-ready' com a lista.
+            
             socket.emit('session-ready', { aliases: machineAliases });
 
             socket.emit('output', `\r\n✅ Conectado! Apelidos SSH configurados.\r\n`);
