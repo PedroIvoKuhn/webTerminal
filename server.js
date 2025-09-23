@@ -4,11 +4,19 @@ const path = require('path');
 const { Server } = require('socket.io');
 const k8s = require('@kubernetes/client-node');
 const forge = require('node-forge');
+const bodyParser = require('body-parser');
+const LTI = require('ims-lti');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const kc = new k8s.KubeConfig();
+
+//Senhas para conectar ao Moodle
+const consumer_key = 'senha'; //Crie uma senha forte
+const consumer_secret = 'senha'; //Crie uma senha forte
+app.use(bodyParser.urlencoded({ extended: true }));
 
 process.env.KUBERNETES_SERVICE_HOST ? kc.loadFromCluster() : kc.loadFromDefault();
 
@@ -18,9 +26,38 @@ const namespace = 'default';
 const PORT = 3000;
 const MPI_IMAGE = 'terminal-web:latest';
 
+app.get('/', (req, res) => {
+    res.status(403).send('Acesso proibido. Por favor, acesse esta ferramenta através do Moodle.');
+});
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/xterm', express.static(path.join(__dirname, 'node_modules/xterm')));
 app.use('/xterm-addon-fit', express.static(path.join(__dirname, 'node_modules/xterm-addon-fit')));
+
+app.post('/lti', (req, res) => {
+    const provider = new LTI.Provider(consumer_key, consumer_secret);
+
+    provider.valid_request(req, (err, isValid) => {
+        if (err || !isValid) {
+            console.error('Falha na validação LTI:', err);
+            return res.status(401).send('Acesso negado: Requisição LTI inválida.');
+        }
+
+        console.log('Requisição LTI Válida! Usuário:', provider.body.lis_person_name_full);
+        const userName = provider.body.lis_person_name_full || 'Usuário';
+        
+        const templatePath = path.join(__dirname, 'public', 'index.html');
+
+        fs.readFile(templatePath, 'utf8', (err, html) => {
+            if (err) {
+                console.error("Erro ao ler o arquivo index.html:", err);
+                return res.status(500).send("Erro interno ao carregar a página.");
+            }
+
+            const finalHtml = html.replace('{{NOME_USUARIO}}', userName);
+            res.send(finalHtml);
+        });
+    });
+});
 
 function generateSSHKeys() {
     return new Promise((resolve, reject) => {
