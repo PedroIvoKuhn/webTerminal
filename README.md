@@ -53,7 +53,7 @@ npm install
 3. Construa a Imagem Docker dos Nós MPI
 Este comando usa o Dockerfile para criar a imagem Docker que será usada para cada nó do cluster do usuário.
 ```
-docker build -t terminal-web:latest -f Dockerfile.mpi .
+docker build -t terminal-web:latest -f Dockerfile .
 ```
 4. Aplique as Permissões no Kubernetes
 Este comando aplica as regras de RBAC (Role-Based Access Control), permitindo que a aplicação gerencie os recursos necessários no cluster.
