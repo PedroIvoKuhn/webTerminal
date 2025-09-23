@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web Terminal MPI</title>
+    <meta name="mpi-image" content="{{MPI_IMAGEM}}">
     <link rel="stylesheet" href="/xterm/css/xterm.css" />
     <style>
         body { background-color: #2d2d2d; color: #f1f1f1; padding: 20px; font-family: sans-serif; }
@@ -18,10 +19,11 @@
     </style>
 </head>
 <body>
-    <h1>Cluster via Web Terminal</h1>
+    <h1>Cluster via Web Terminal - Bem-vindo, {{NOME_USUARIO}}!</h1>
 
     <div id="setup-container">
         <h2>Configuração do Cluster</h2>
+        <p>Você está usando a imagem: {{MPI_IMAGEM}}</p>
         <p>Quantos nós (máquinas) você deseja para sua aplicação MPI?</p>
         <form id="setup-form">
             <input type="number" id="num-machines" value="2" min="1" required>

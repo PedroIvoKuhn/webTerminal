@@ -34,11 +34,11 @@ setupForm.addEventListener('submit', (e) => {
     e.preventDefault(); 
     
     const numMachines = parseInt(numMachinesInput.value, 10);
-
+    // Lê o nome da imagem da meta tag
+    const mpiImagem = document.querySelector('meta[name="mpi-image"]').getAttribute('content');
     if (numMachines > 0) {
         // 2. Envia o número de máquinas para o backend
-        socket.emit('start-session', { numMachines });
-        
+        socket.emit('start-session', { numMachines: numMachines, mpiImagem: mpiImagem });
         // 3. Mostra o terminal para o usuário
         initializeTerminal();
     }
