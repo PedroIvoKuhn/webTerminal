@@ -1,4 +1,4 @@
-# Terminal Web para Clusters MPI On-Demand
+# Terminal Web para Clusters MPI On-Demand Versão SIIEPE
 
 Uma aplicação web que provisiona, sob demanda, ambientes de múltiplos nós para o ensino e a prática de computação paralela com MPI. 
 A solução utiliza Kubernetes para orquestrar contêineres dinamicamente, oferecendo a cada usuário um cluster privado e isolado, acessível diretamente pelo navegador.
