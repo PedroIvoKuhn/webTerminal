@@ -4,11 +4,19 @@ const path = require('path');
 const { Server } = require('socket.io');
 const k8s = require('@kubernetes/client-node');
 const forge = require('node-forge');
+const bodyParser = require('body-parser');
+const LTI = require('ims-lti');
+const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const kc = new k8s.KubeConfig();
+
+//Senhas para conectar ao Moodle
+const consumer_key = '12345678'; //Crie uma senha forte
+const consumer_secret = '123456789'; //Crie uma senha forte
+app.use(bodyParser.urlencoded({ extended: true }));
 
 process.env.KUBERNETES_SERVICE_HOST ? kc.loadFromCluster() : kc.loadFromDefault();
 
@@ -16,11 +24,45 @@ const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
 const k8sExec = new k8s.Exec(kc);
 const namespace = 'default';
 const PORT = 3000;
-const MPI_IMAGE = 'terminal-web:latest';
 
+app.get('/', (req, res) => {
+    res.status(403).send('Acesso proibido. Por favor, acesse esta ferramenta através do Moodle.');
+});
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/xterm', express.static(path.join(__dirname, 'node_modules/xterm')));
 app.use('/xterm-addon-fit', express.static(path.join(__dirname, 'node_modules/xterm-addon-fit')));
+
+app.post('/lti', (req, res) => {
+    const provider = new LTI.Provider(consumer_key, consumer_secret);
+
+    provider.valid_request(req, (err, isValid) => {
+        if (err || !isValid) {
+            console.error('Falha na validação LTI:', err);
+            return res.status(401).send('Acesso negado: Requisição LTI inválida.');
+        }
+
+        console.log('Requisição LTI Válida! Usuário:', provider.body.lis_person_name_full);
+        console.log('Parâmetros LTI recebidos:', provider.body); 
+
+        console.log(`Parâmetro 'imagem' capturado: ${provider.body.custom_imagem}`);
+        const userName = provider.body.lis_person_name_full || 'Usuário';
+        const MPI_IMAGE = provider.body.custom_imagem || 'terminal-web:latest';
+        
+        const templatePath = path.join(__dirname, 'public', 'index.html');
+
+        fs.readFile(templatePath, 'utf8', (err, html) => {
+            if (err) {
+                console.error("Erro ao ler o arquivo index.html:", err);
+                return res.status(500).send("Erro interno ao carregar a página.");
+            }
+
+            let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
+            finalHtml = finalHtml.replaceAll('{{MPI_IMAGEM}}', MPI_IMAGE);
+
+            res.send(finalHtml);
+        });
+    });
+});
 
 function generateSSHKeys() {
     return new Promise((resolve, reject) => {
@@ -88,14 +130,14 @@ async function waitForPodRunning(api, name, namespace) {
 io.on('connection', (socket) => {
     console.log(`Frontend conectado: ${socket.id}`);
 
-    socket.on('start-session', async ({ numMachines }) => {
+    socket.on('start-session', async ({numMachines, mpiImagem}) => {
         const jobId = `mpi-job-${socket.id.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
         const masterPodName = `master-${jobId}`;
         const serviceName = `svc-${jobId}`;
         const secretName = `ssh-keys-${jobId}`;
         socket.data.jobId = jobId;
 
-        socket.emit('output', `\r\nIniciando ${numMachines} nós para o job ${jobId}...\r\n`);
+        socket.emit('output', `\r\nIniciando ${numMachines} nós para o job ${jobId} usando a imagem ${mpiImagem}...\r\n`);
         
         try {
             socket.emit('output', 'Gerando chaves e configuração SSH...\r\n');
@@ -152,7 +194,7 @@ io.on('connection', (socket) => {
                         serviceAccountName: 'terminal-backend-sa',
                         containers: [{
                             name: 'mpi-container',
-                            image: MPI_IMAGE,
+                            image: mpiImagem,
                             imagePullPolicy: 'IfNotPresent',
                             volumeMounts: [
                                 {
