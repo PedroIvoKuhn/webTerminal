@@ -24,7 +24,6 @@ const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
 const k8sExec = new k8s.Exec(kc);
 const namespace = 'default';
 const PORT = 3000;
-const MPI_IMAGE = 'terminal-web:latest';
 
 app.get('/', (req, res) => {
     res.status(403).send('Acesso proibido. Por favor, acesse esta ferramenta através do Moodle.');
@@ -43,7 +42,11 @@ app.post('/lti', (req, res) => {
         }
 
         console.log('Requisição LTI Válida! Usuário:', provider.body.lis_person_name_full);
+        console.log('Parâmetros LTI recebidos:', provider.body); 
+
+        console.log(`Parâmetro 'imagem' capturado: ${provider.body.custom_imagem}`);
         const userName = provider.body.lis_person_name_full || 'Usuário';
+        const MPI_IMAGE = provider.body.custom_imagem || 'terminal-web:latest';
         
         const templatePath = path.join(__dirname, 'public', 'index.html');
 
@@ -53,7 +56,9 @@ app.post('/lti', (req, res) => {
                 return res.status(500).send("Erro interno ao carregar a página.");
             }
 
-            const finalHtml = html.replace('{{NOME_USUARIO}}', userName);
+            let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
+            finalHtml = finalHtml.replaceAll('{{MPI_IMAGEM}}', MPI_IMAGE);
+
             res.send(finalHtml);
         });
     });
@@ -125,14 +130,14 @@ async function waitForPodRunning(api, name, namespace) {
 io.on('connection', (socket) => {
     console.log(`Frontend conectado: ${socket.id}`);
 
-    socket.on('start-session', async ({ numMachines }) => {
+    socket.on('start-session', async ({numMachines, mpiImagem}) => {
         const jobId = `mpi-job-${socket.id.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
         const masterPodName = `master-${jobId}`;
         const serviceName = `svc-${jobId}`;
         const secretName = `ssh-keys-${jobId}`;
         socket.data.jobId = jobId;
 
-        socket.emit('output', `\r\nIniciando ${numMachines} nós para o job ${jobId}...\r\n`);
+        socket.emit('output', `\r\nIniciando ${numMachines} nós para o job ${jobId} usando a imagem ${mpiImagem}...\r\n`);
         
         try {
             socket.emit('output', 'Gerando chaves e configuração SSH...\r\n');
@@ -189,7 +194,7 @@ io.on('connection', (socket) => {
                         serviceAccountName: 'terminal-backend-sa',
                         containers: [{
                             name: 'mpi-container',
-                            image: MPI_IMAGE,
+                            image: mpiImagem,
                             imagePullPolicy: 'IfNotPresent',
                             volumeMounts: [
                                 {
