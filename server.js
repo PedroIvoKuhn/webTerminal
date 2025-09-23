@@ -14,8 +14,8 @@ const io = new Server(server);
 const kc = new k8s.KubeConfig();
 
 //Senhas para conectar ao Moodle
-const consumer_key = 'senha'; //Crie uma senha forte
-const consumer_secret = 'senha'; //Crie uma senha forte
+const consumer_key = '12345678'; //Crie uma senha forte
+const consumer_secret = '123456789'; //Crie uma senha forte
 app.use(bodyParser.urlencoded({ extended: true }));
 
 process.env.KUBERNETES_SERVICE_HOST ? kc.loadFromCluster() : kc.loadFromDefault();
