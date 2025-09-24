@@ -13,9 +13,8 @@ const server = http.createServer(app);
 const io = new Server(server);
 const kc = new k8s.KubeConfig();
 
-//Senhas para conectar ao Moodle
-const consumer_key = '12345678'; //Crie uma senha forte
-const consumer_secret = '123456789'; //Crie uma senha forte
+const consumer_key = '12345678'; 
+const consumer_secret = '123456789'; 
 app.use(bodyParser.urlencoded({ extended: true }));
 
 process.env.KUBERNETES_SERVICE_HOST ? kc.loadFromCluster() : kc.loadFromDefault();
@@ -46,7 +45,11 @@ app.post('/lti', (req, res) => {
 
         console.log(`Parâmetro 'imagem' capturado: ${provider.body.custom_imagem}`);
         const userName = provider.body.lis_person_name_full || 'Usuário';
-        const MPI_IMAGE = provider.body.custom_imagem || 'terminal-web:latest';
+        let MPI_IMAGE = 'terminal-web:latest';
+
+        if (provider.body.custom_imagem && provider.body.custom_imagem.toLowerCase() !== 'default') {
+            MPI_IMAGE = provider.body.custom_imagem;
+        } 
         
         const templatePath = path.join(__dirname, 'public', 'index.html');
 
@@ -57,7 +60,7 @@ app.post('/lti', (req, res) => {
             }
 
             let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
-            finalHtml = finalHtml.replaceAll('{{MPI_IMAGEM}}', MPI_IMAGE);
+            finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', MPI_IMAGE);
 
             res.send(finalHtml);
         });
@@ -130,14 +133,14 @@ async function waitForPodRunning(api, name, namespace) {
 io.on('connection', (socket) => {
     console.log(`Frontend conectado: ${socket.id}`);
 
-    socket.on('start-session', async ({numMachines, mpiImagem}) => {
+    socket.on('start-session', async ({numMachines, mpiImage}) => {
         const jobId = `mpi-job-${socket.id.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
         const masterPodName = `master-${jobId}`;
         const serviceName = `svc-${jobId}`;
         const secretName = `ssh-keys-${jobId}`;
         socket.data.jobId = jobId;
 
-        socket.emit('output', `\r\nIniciando ${numMachines} nós para o job ${jobId} usando a imagem ${mpiImagem}...\r\n`);
+        socket.emit('output', `\r\nIniciando ${numMachines} nós para o job ${jobId} usando a imagem ${mpiImage}...\r\n`);
         
         try {
             socket.emit('output', 'Gerando chaves e configuração SSH...\r\n');
@@ -194,7 +197,7 @@ io.on('connection', (socket) => {
                         serviceAccountName: 'terminal-backend-sa',
                         containers: [{
                             name: 'mpi-container',
-                            image: mpiImagem,
+                            image: mpiImage,
                             imagePullPolicy: 'IfNotPresent',
                             volumeMounts: [
                                 {
@@ -277,11 +280,17 @@ async function cleanupJob(jobId, secretName) {
             await k8sApi.deleteNamespacedSecret(secretName, namespace);
         }
         console.log(`Deletando pods com label mpi-job-id=${jobId}`);
-        await k8sApi.deleteCollectionNamespacedPod(namespace, undefined, undefined, undefined, undefined, { labelSelector: `mpi-job-id=${jobId}` });
-        
+        await k8sApi.deleteCollectionNamespacedPod(
+            namespace, 
+            undefined,                      // pretty
+            undefined,                   // _continue
+            undefined,                      // dryRun
+            undefined,               // fieldSelector
+            undefined,          // gracePeriodSeconds
+            `mpi-job-id=${jobId}`    // labelSelector
+        );
         console.log(`Deletando service svc-${jobId}`);
         await k8sApi.deleteNamespacedService(`svc-${jobId}`, namespace);
-
         console.log(`Limpeza para ${jobId} concluída.`);
     } catch (err) {
         if (err.body && err.body.code !== 404) {
