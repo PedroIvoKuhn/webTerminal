@@ -17,8 +17,6 @@ const fitAddon = new FitAddon.FitAddon();
 term.loadAddon(fitAddon);
 
 // --- Lógica de Inicialização ---
-
-// Função que esconde o formulário e mostra/configura o terminal
 function initializeTerminal() {
     setupContainer.style.display = 'none';
     terminalContainer.style.display = 'block';
@@ -30,38 +28,30 @@ function initializeTerminal() {
 
 // Lida com o envio do formulário de configuração inicial
 setupForm.addEventListener('submit', (e) => {
-    // 1. Previne o recarregamento da página
     e.preventDefault(); 
-    
     const numMachines = parseInt(numMachinesInput.value, 10);
-    // Lê o nome da imagem da meta tag
-    const mpiImagem = document.querySelector('meta[name="mpi-image"]').getAttribute('content');
+    const mpiImage = document.querySelector('meta[name="mpi-image"]').getAttribute('content');
+
     if (numMachines > 0) {
-        // 2. Envia o número de máquinas para o backend
-        socket.emit('start-session', { numMachines: numMachines, mpiImagem: mpiImagem });
-        // 3. Mostra o terminal para o usuário
+        socket.emit('start-session', { numMachines: numMachines, mpiImage: mpiImage });
         initializeTerminal();
     }
 });
 
 
 // --- Lógica de Interação com o Terminal (Pós-inicialização) ---
-
-// Envia cada tecla/dado diretamente para o backend
 term.onData(data => {
     socket.emit('input', data);
 });
 
-// Apenas escreve na tela o que o backend mandar
 socket.on('output', data => {
     term.write(data);
 });
 
 socket.on('session-ready', (data) => {
     const machineList = document.getElementById('machine-list');
-    machineList.innerHTML = ''; // Limpa a lista para garantir
+    machineList.innerHTML = '';
 
-    // Para cada apelido recebido, cria um item <li> e o adiciona à lista <ul>
     data.aliases.forEach(alias => {
         const listItem = document.createElement('li');
         listItem.textContent = alias;
@@ -69,7 +59,6 @@ socket.on('session-ready', (data) => {
     });
 });
 
-// Lida com erros de conexão para informar o usuário
 socket.on('connect_error', (err) => {
     console.error(`Erro de conexão: ${err.message}`);
     term.write(`\r\n[ERRO DE CONEXÃO]: ${err.message}`);
