@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
@@ -13,59 +14,70 @@ const server = http.createServer(app);
 const io = new Server(server);
 const kc = new k8s.KubeConfig();
 
-const consumer_key = '12345678'; 
-const consumer_secret = '123456789'; 
+const consumer_key = process.env.LTI_KEY; 
+const consumer_secret = process.env.LTI_SECRET; 
 app.use(bodyParser.urlencoded({ extended: true }));
 
 process.env.KUBERNETES_SERVICE_HOST ? kc.loadFromCluster() : kc.loadFromDefault();
 
 const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
 const k8sExec = new k8s.Exec(kc);
-const namespace = 'default';
-const PORT = 3000;
+const namespace = process.env.K8S_NAMESPACE || 'default';
+const PORT = process.env.PORT || 3000;
 
-app.get('/', (req, res) => {
-    res.status(403).send('Acesso proibido. Por favor, acesse esta ferramenta através do Moodle.');
-});
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/xterm', express.static(path.join(__dirname, 'node_modules/xterm')));
 app.use('/xterm-addon-fit', express.static(path.join(__dirname, 'node_modules/xterm-addon-fit')));
 
-app.post('/lti', (req, res) => {
-    const provider = new LTI.Provider(consumer_key, consumer_secret);
-
-    provider.valid_request(req, (err, isValid) => {
-        if (err || !isValid) {
-            console.error('Falha na validação LTI:', err);
-            return res.status(401).send('Acesso negado: Requisição LTI inválida.');
-        }
-
-        console.log('Requisição LTI Válida! Usuário:', provider.body.lis_person_name_full);
-        console.log('Parâmetros LTI recebidos:', provider.body); 
-
-        console.log(`Parâmetro 'imagem' capturado: ${provider.body.custom_imagem}`);
-        const userName = provider.body.lis_person_name_full || 'Usuário';
-        let MPI_IMAGE = 'terminal-web:latest';
-
-        if (provider.body.custom_imagem && provider.body.custom_imagem.toLowerCase() !== 'default') {
-            MPI_IMAGE = provider.body.custom_imagem;
-        } 
+if (process.env.NODE_ENV === "development"){
+    app.get('/', (req, res) => {
+        const userName = "userDev";
+        const MPI_IMAGE = process.env.DEFAULT_MPI_IMAGE;
+        const templatePath = path.join(__dirname, 'views', 'index.html');
         
-        const templatePath = path.join(__dirname, 'public', 'index.html');
-
         fs.readFile(templatePath, 'utf8', (err, html) => {
-            if (err) {
-                console.error("Erro ao ler o arquivo index.html:", err);
-                return res.status(500).send("Erro interno ao carregar a página.");
-            }
+            if (err) return res.status(500).send("Erro ao carregar index.html.");
 
             let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
             finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', MPI_IMAGE);
-
             res.send(finalHtml);
+        })
+    });
+} else {
+    app.get('/', (req, res) => {
+        res.status(403).send('Acesso proibido. Por favor, acesse esta ferramenta através do Moodle.');
+    });
+
+    app.post('/lti', (req, res) => {
+        const provider = new LTI.Provider(consumer_key, consumer_secret);
+        provider.valid_request(req, (err, isValid) => {
+            if (err || !isValid) {
+                console.error('Falha na validação LTI:', err);
+                return res.status(401).send('Acesso negado: Requisição LTI inválida.');
+            }
+            //console.log('Requisição LTI Válida! Usuário:', provider.body.lis_person_name_full);
+            //console.log(`Parâmetro 'imagem' capturado: ${provider.body.custom_imagem}`);
+            const userName = provider.body.lis_person_name_full || 'Usuário';
+            let MPI_IMAGE = process.env.DEFAULT_MPI_IMAGE;
+            const templatePath = path.join(__dirname, 'views', 'index.html');
+    
+            if (provider.body.custom_imagem && provider.body.custom_imagem.toLowerCase() !== 'default') {
+                MPI_IMAGE = provider.body.custom_imagem;
+            }
+
+            fs.readFile(templatePath, 'utf8', (err, html) => {
+                if (err) {
+                    console.error("Erro ao ler o arquivo index.html:", err);
+                    return res.status(500).send("Erro interno ao carregar a página.");
+                }
+    
+                let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
+                finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', MPI_IMAGE);
+                res.send(finalHtml);
+            });
         });
     });
-});
+}
 
 function generateSSHKeys() {
     return new Promise((resolve, reject) => {
@@ -81,7 +93,7 @@ function generateSSHKeys() {
 }
 
 async function waitForPodRunning(api, name, namespace) {
-    console.log(`Aguardando Pod ${name} ficar 'Running'...`);
+    //console.log(`Aguardando Pod ${name} ficar 'Running'...`);
     const watcher = new k8s.Watch(kc);
     
     return new Promise((resolve, reject) => {
@@ -97,7 +109,7 @@ async function waitForPodRunning(api, name, namespace) {
 
         const watchCallback = (type, apiObj) => {
             if (apiObj.status && apiObj.status.phase === 'Running') {
-                console.log(`Pod ${name} está 'Running'.`);
+                //console.log(`Pod ${name} está 'Running'.`);
                 cleanup();
                 resolve();
             }
@@ -131,7 +143,7 @@ async function waitForPodRunning(api, name, namespace) {
 }
 
 io.on('connection', (socket) => {
-    console.log(`Frontend conectado: ${socket.id}`);
+    //console.log(`Frontend conectado: ${socket.id}`);
 
     socket.on('start-session', async ({numMachines, mpiImage}) => {
         const jobId = `mpi-job-${socket.id.toLowerCase().replace(/[^a-z0-9]/g, '')}`;
@@ -168,7 +180,7 @@ io.on('connection', (socket) => {
                     'config': Buffer.from(sshConfig).toString('base64')
                 }
             };
-            console.log(`Criando Secret: ${secretName}`);
+            //console.log(`Criando Secret: ${secretName}`);
             await k8sApi.createNamespacedSecret(namespace, secretManifest);
 
             const serviceManifest = {
@@ -177,7 +189,7 @@ io.on('connection', (socket) => {
                  metadata: { name: serviceName },
                  spec: { clusterIP: 'None', selector: { 'mpi-job-id': jobId } }
             };
-            console.log(`Criando Headless Service: ${serviceName}`);
+            //console.log(`Criando Headless Service: ${serviceName}`);
             await k8sApi.createNamespacedService(namespace, serviceManifest);
 
             const podPromises = [];
@@ -232,7 +244,7 @@ io.on('connection', (socket) => {
                         restartPolicy: 'Never'
                     }
                 };
-                console.log(`Criando Pod: ${podName}`);
+                //console.log(`Criando Pod: ${podName}`);
                 podPromises.push(k8sApi.createNamespacedPod(namespace, podManifest));
             }
             await Promise.all(podPromises);
@@ -264,7 +276,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', async () => {
-        console.log(`Frontend ${socket.id} desconectado.`);
+        //console.log(`Frontend ${socket.id} desconectado.`);
         if (socket.data.jobId) {
             const secretName = `ssh-keys-${socket.data.jobId}`;
             await cleanupJob(socket.data.jobId, secretName);
@@ -273,13 +285,13 @@ io.on('connection', (socket) => {
 });
 
 async function cleanupJob(jobId, secretName) {
-    console.log(`Iniciando limpeza para o job: ${jobId}`);
+    //console.log(`Iniciando limpeza para o job: ${jobId}`);
     try {
         if (secretName) {
-            console.log(`Deletando Secret: ${secretName}`);
+            //console.log(`Deletando Secret: ${secretName}`);
             await k8sApi.deleteNamespacedSecret(secretName, namespace);
         }
-        console.log(`Deletando pods com label mpi-job-id=${jobId}`);
+        //console.log(`Deletando pods com label mpi-job-id=${jobId}`);
         await k8sApi.deleteCollectionNamespacedPod(
             namespace, 
             undefined,                      // pretty
@@ -289,9 +301,9 @@ async function cleanupJob(jobId, secretName) {
             undefined,          // gracePeriodSeconds
             `mpi-job-id=${jobId}`    // labelSelector
         );
-        console.log(`Deletando service svc-${jobId}`);
+        //console.log(`Deletando service svc-${jobId}`);
         await k8sApi.deleteNamespacedService(`svc-${jobId}`, namespace);
-        console.log(`Limpeza para ${jobId} concluída.`);
+        //console.log(`Limpeza para ${jobId} concluída.`);
     } catch (err) {
         if (err.body && err.body.code !== 404) {
             console.error(`Erro durante a limpeza do job ${jobId}:`, err.body ? err.body.message : err);
