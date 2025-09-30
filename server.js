@@ -311,6 +311,6 @@ async function cleanupJob(jobId, secretName) {
     }
 }
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Servidor rodando em http://localhost:${PORT}`);
 });
