@@ -18,6 +18,9 @@ spec:
           image: localhost:32000/terminal-web-backend:latest 
           ports:
             - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: "production"
           envFrom:
             - secretRef:
                 name: terminal-web-secrets
