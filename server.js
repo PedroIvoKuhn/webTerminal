@@ -8,21 +8,6 @@ const forge = require('node-forge');
 const fs = require('fs');
 const lti = require('ltijs').Provider;
 
-const { 
-    NODE_ENV,
-    PORT,
-    DEFAULT_MPI_IMAGE,
-    K8S_NAMESPACE,
-    LTI_ENCRYPTION_KEY,
-    MONGO_DB_URI,
-    LTI_PLATFORM_URL,
-    LTI_PLATFORM_NAME,
-    LTI_CLIENT_ID,
-    LTI_AUTH_ENDPOINT,
-    LTI_TOKEN_ENDPOINT,
-    LTI_KEYSET_ENDPOINT
-} = process.env;
-
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
@@ -32,31 +17,32 @@ process.env.KUBERNETES_SERVICE_HOST ? kc.loadFromCluster() : kc.loadFromDefault(
 
 const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
 const k8sExec = new k8s.Exec(kc);
-const namespace = K8S_NAMESPACE || 'default';
+const namespace = process.env.K8S_NAMESPACE || 'default';
+const PORT = process.env.PORT || 3000;
 
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/xterm', express.static(path.join(__dirname, 'node_modules/xterm')));
 app.use('/xterm-addon-fit', express.static(path.join(__dirname, 'node_modules/xterm-addon-fit')));
 
 async function startServer() {
-    if (NODE_ENV === "development"){
+    if (process.env.NODE_ENV === "development"){
         app.get('/', (req, res) => {
             const userName = "userDev";
-            const MPI_IMAGE = process.env.DEFAULT_MPI_IMAGE;
+            const mpiImage = process.env.DEFAULT_MPI_IMAGE;
             const templatePath = path.join(__dirname, 'views', 'index.html');
             
             fs.readFile(templatePath, 'utf8', (err, html) => {
                 if (err) return res.status(500).send("Erro ao carregar index.html.");
 
                 let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
-                finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', MPI_IMAGE);
+                finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', mpiImage);
                 res.send(finalHtml);
             })
         });
     } else {
-        await lti.setup(LTI_ENCRYPTION_KEY,
+        await lti.setup(process.env.LTI_ENCRYPTION_KEY,
             {
-                url: MONGO_DB_URI,
+                url: process.env.MONGO_DB_URI,
                 connection: {
                     useNewUrlParser: true,
                     useUnifiedTopology: true
@@ -67,10 +53,10 @@ async function startServer() {
                 loginRoute: '/login',
                 keysetRoute: '/keys',
                 cookies: {
-                    secure: NODE_ENV === 'production',
+                    secure: process.env.NODE_ENV === 'production',
                     sameSite: 'None'
                 },
-                devMode: NODE_ENV !== 'production'
+                devMode: process.env.NODE_ENV !== 'production'
             }
         );
 
@@ -78,26 +64,33 @@ async function startServer() {
         app.use(lti.app);
 
         await lti.registerPlatform({
-            url: LTI_PLATFORM_URL,
-            name: LTI_PLATFORM_NAME,
-            clientId: LTI_CLIENT_ID,
-            authenticationEndpoint: LTI_AUTH_ENDPOINT,
-            accesstokenEndpoint: LTI_TOKEN_ENDPOINT,
+            url: process.env.LTI_PLATFORM_URL,
+            name: process.env.LTI_PLATFORM_NAME,
+            clientId: process.env.LTI_CLIENT_ID,
+            authenticationEndpoint: process.env.LTI_AUTH_ENDPOINT,
+            accesstokenEndpoint: process.env.LTI_TOKEN_ENDPOINT,
             authConfig: {
                 method: 'JWK_SET',
-                key: LTI_KEYSET_ENDPOINT
+                key: process.env.LTI_KEYSET_ENDPOINT
             }
         });
 
         lti.onConnect(async (token, req, res) => {
             console.log('Usuário conectado:', token.user);
             const userName = token.user.name || 'Usuário Desconhecido';
+            let mpiImage = process.env.DEFAULT_MPI_IMAGE;
             
+            //Captura o nome da imagem
+            const custImagem = token.platformContext.custom ? token.platformContext.custom.imagem : undefined;
+            if (custImagem && custImagem.toLowerCase() !== 'default') {              
+                mpiImage = custImagem;
+            }
+
             const templatePath = path.join(__dirname, 'views', 'index.html');
             fs.readFile(templatePath, 'utf8', (err, html) => {
                 if (err) return res.status(500).send("Erro ao carregar index.html.");
                 let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
-                finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', DEFAULT_MPI_IMAGE);
+                finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', mpiImage);
                 res.send(finalHtml);
             });
         });
