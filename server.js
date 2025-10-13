@@ -60,7 +60,7 @@ async function startServer() {
             }
         );
 
-        await lti.deploy();
+        await lti.deploy({ port: PORT + 1});
         app.use(lti.app);
 
         await lti.registerPlatform({
