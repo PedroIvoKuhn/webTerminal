@@ -5,18 +5,13 @@ const path = require('path');
 const { Server } = require('socket.io');
 const k8s = require('@kubernetes/client-node');
 const forge = require('node-forge');
-const bodyParser = require('body-parser');
-const LTI = require('ims-lti');
 const fs = require('fs');
+const lti = require('ltijs').Provider;
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 const kc = new k8s.KubeConfig();
-
-const consumer_key = process.env.LTI_KEY; 
-const consumer_secret = process.env.LTI_SECRET; 
-app.use(bodyParser.urlencoded({ extended: true }));
 
 process.env.KUBERNETES_SERVICE_HOST ? kc.loadFromCluster() : kc.loadFromDefault();
 
@@ -29,53 +24,80 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/xterm', express.static(path.join(__dirname, 'node_modules/xterm')));
 app.use('/xterm-addon-fit', express.static(path.join(__dirname, 'node_modules/xterm-addon-fit')));
 
-if (process.env.NODE_ENV === "development"){
-    app.get('/', (req, res) => {
-        const userName = "userDev";
-        const MPI_IMAGE = process.env.DEFAULT_MPI_IMAGE;
-        const templatePath = path.join(__dirname, 'views', 'index.html');
-        
-        fs.readFile(templatePath, 'utf8', (err, html) => {
-            if (err) return res.status(500).send("Erro ao carregar index.html.");
-
-            let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
-            finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', MPI_IMAGE);
-            res.send(finalHtml);
-        })
-    });
-} else {
-    app.get('/', (req, res) => {
-        res.status(403).send('Acesso proibido. Por favor, acesse esta ferramenta através do Moodle.');
-    });
-
-    app.post('/lti', (req, res) => {
-        const provider = new LTI.Provider(consumer_key, consumer_secret);
-        provider.valid_request(req, (err, isValid) => {
-            if (err || !isValid) {
-                console.error('Falha na validação LTI:', err);
-                return res.status(401).send('Acesso negado: Requisição LTI inválida.');
-            }
-            //console.log('Requisição LTI Válida! Usuário:', provider.body.lis_person_name_full);
-            //console.log(`Parâmetro 'imagem' capturado: ${provider.body.custom_imagem}`);
-            const userName = provider.body.lis_person_name_full || 'Usuário';
-            let MPI_IMAGE = process.env.DEFAULT_MPI_IMAGE;
+async function startServer() {
+    if (process.env.NODE_ENV === "development"){
+        app.get('/', (req, res) => {
+            const userName = "userDev";
+            const mpiImage = process.env.DEFAULT_MPI_IMAGE;
             const templatePath = path.join(__dirname, 'views', 'index.html');
-    
-            if (provider.body.custom_imagem && provider.body.custom_imagem.toLowerCase() !== 'default') {
-                MPI_IMAGE = provider.body.custom_imagem;
+            
+            fs.readFile(templatePath, 'utf8', (err, html) => {
+                if (err) return res.status(500).send("Erro ao carregar index.html.");
+
+                let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
+                finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', mpiImage);
+                res.send(finalHtml);
+            })
+        });
+    } else {
+        await lti.setup(process.env.LTI_ENCRYPTION_KEY,
+            {
+                url: process.env.MONGO_DB_URI,
+                connection: {
+                    useNewUrlParser: true,
+                    useUnifiedTopology: true
+                }
+            },
+            {
+                appRoute: '/launch',
+                loginRoute: '/login',
+                keysetRoute: '/keys',
+                cookies: {
+                    secure: process.env.NODE_ENV === 'production',
+                    sameSite: 'None'
+                },
+                devMode: process.env.NODE_ENV !== 'production'
+            }
+        );
+
+        await lti.deploy();
+        app.use(lti.app);
+
+        await lti.registerPlatform({
+            url: process.env.LTI_PLATFORM_URL,
+            name: process.env.LTI_PLATFORM_NAME,
+            clientId: process.env.LTI_CLIENT_ID,
+            authenticationEndpoint: process.env.LTI_AUTH_ENDPOINT,
+            accesstokenEndpoint: process.env.LTI_TOKEN_ENDPOINT,
+            authConfig: {
+                method: 'JWK_SET',
+                key: process.env.LTI_KEYSET_ENDPOINT
+            }
+        });
+
+        lti.onConnect(async (token, req, res) => {
+            console.log('Usuário conectado:', token.user);
+            const userName = token.user.name || 'Usuário Desconhecido';
+            let mpiImage = process.env.DEFAULT_MPI_IMAGE;
+            
+            //Captura o nome da imagem
+            const custImagem = token.platformContext.custom ? token.platformContext.custom.imagem : undefined;
+            if (custImagem && custImagem.toLowerCase() !== 'default') {              
+                mpiImage = custImagem;
             }
 
+            const templatePath = path.join(__dirname, 'views', 'index.html');
             fs.readFile(templatePath, 'utf8', (err, html) => {
-                if (err) {
-                    console.error("Erro ao ler o arquivo index.html:", err);
-                    return res.status(500).send("Erro interno ao carregar a página.");
-                }
-    
+                if (err) return res.status(500).send("Erro ao carregar index.html.");
                 let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
-                finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', MPI_IMAGE);
+                finalHtml = finalHtml.replaceAll('{{MPI_IMAGE}}', mpiImage);
                 res.send(finalHtml);
             });
         });
+    }
+
+    server.listen(PORT, () => {
+        console.log(`Servidor rodando em http://localhost:${PORT}`);
     });
 }
 
@@ -311,6 +333,4 @@ async function cleanupJob(jobId, secretName) {
     }
 }
 
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor rodando em http://localhost:${PORT}`);
-});
+startServer().catch(err => console.error("Falha ao iniciar o servidor:", err));
