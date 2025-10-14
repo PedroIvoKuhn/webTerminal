@@ -49,9 +49,6 @@ async function startServer() {
                 }
             },
             {
-                appRoute: '/launch',
-                loginRoute: '/login',
-                keysetRoute: '/keys',
                 cookies: {
                     secure: process.env.NODE_ENV === 'production',
                     sameSite: 'None'
@@ -60,7 +57,7 @@ async function startServer() {
             }
         );
 
-        await lti.deploy();
+        await lti.deploy({port: PORT + 1});
         app.use(lti.app);
 
         await lti.registerPlatform({
