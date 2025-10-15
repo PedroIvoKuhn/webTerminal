@@ -49,9 +49,6 @@ async function startServer() {
                 }
             },
             {
-                appRoute: '/launch',
-                loginRoute: '/login',
-                keysetRoute: '/keys',
                 cookies: {
                     secure: process.env.NODE_ENV === 'production',
                     sameSite: 'None'
