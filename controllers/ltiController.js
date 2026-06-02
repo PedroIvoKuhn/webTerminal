@@ -4,7 +4,7 @@ const lti = require('ltijs').Provider;
 
 // Função privada
 
-function renderTemplate(res, userName, image) {
+function renderTemplate(res, userName, image, ltiToken) {
     const templatePath = path.join(__dirname, '../views', 'index.html');
 
     fs.readFile(templatePath, 'utf8', (err, html) => {
@@ -12,6 +12,9 @@ function renderTemplate(res, userName, image) {
 
         let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
         finalHtml = finalHtml.replaceAll('{{IMAGE}}', image);
+
+        const scriptToken = `<script>window.LTI_TOKEN = "${ltiToken}";</script>`;
+        finalHtml = finalHtml.replace('</head>', `${scriptToken}\n</head>`);
         res.send(finalHtml);
     });
 }
@@ -26,8 +29,8 @@ async function setup(app) {
             renderTemplate(res, userName, image);
         });
         
-        app.get('/documentation', (req, res) => {
-            const documentationPath = path.join(__dirname, '../views', 'documentation.html');
+        app.get('/how-use', (req, res) => {
+            const documentationPath = path.join(__dirname, '../views', 'howUse.html');
             res.sendFile(documentationPath);
         });
         return;
@@ -43,6 +46,7 @@ async function setup(app) {
             }
         },
         {
+            staticPath: path.join(__dirname, '../public'),
             cookies: {
                 secure: process.env.NODE_ENV === 'production',
                 //secure: true, // Em produção sempre true
@@ -55,6 +59,7 @@ async function setup(app) {
 
     await lti.deploy({port: process.env.PORT + 1});
     app.use(lti.app);
+    app.get('/favicon.ico', (req, res) => res.status(204).end());
 
     await lti.registerPlatform({
         url: process.env.LTI_PLATFORM_URL,
@@ -70,34 +75,47 @@ async function setup(app) {
 
     lti.onConnect(async (token, req, res) => {
         console.log('Usuário conectado:', token.userInfo.name , " ID:", token.user);
-        const userName = token.userInfo.name || 'Usuário Desconhecido';
-        let image = process.env.DEFAULT_MPI_IMAGE;
-
         //ID para o MiniO
         req.session.userId = token.user;
         req.session.save();
 
-        const custImagem = token.platformContext.custom ? token.platformContext.custom.imagem : undefined;
-        if (custImagem && custImagem.toLowerCase() !== 'default') {
-            image = custImagem;
-        }
-        renderTemplate(res, userName, image);
+        return lti.redirect(res, "/home");
     });
 
     lti.onInvalidToken(async (req, res, next) => {
-    console.warn(`[LTI] Tentativa de acesso bloqueada (Token Inválido ou Acesso Direto).`);
+        if (req.url.includes('favicon.ico') || req.url.includes('socket.io')) {
+            return next();
+        }
+
+        console.warn(`[LTI] Tentativa de acesso bloqueada (Token Inválido ou Acesso Direto).`);
     
-    const unauthorizedPath = path.join(__dirname, '../views', 'unauthorized.html');
-    return res.status(401).sendFile(unauthorizedPath);
+        const unauthorizedPath = path.join(__dirname, '../views', 'unauthorized.html');
+        return res.status(401).sendFile(unauthorizedPath);
     });
 
-    lti.app.get('/', (req, res) => {
-        const home = path.join(__dirname, "../views", 'index.html');
-        res.sendFile(home)
+    lti.app.get('/home', (req, res) => {
+        const ltiToken = res.locals.token;
+        const tokenRaw = req.query.ltik;
+
+        if (!ltiToken) return res.status(401).send("Sessão LTI não encontrada.")
+
+        try {
+            const userName = ltiToken.userInfo.name || 'Usuário Desconhecido';
+            let image = process.env.DEFAULT_MPI_IMAGE;
+            const customParams = ltiToken.platformContext.custom;
+            if (customParams && customParams.imagem && customParams.imagem.toLowerCase() !== 'default') {
+                image = customParams.imagem;
+            }
+
+            renderTemplate(res, userName, image, tokenRaw);
+        } catch (err) {
+            console.error("[LTI Error] Erro ao processar template:", err);
+            res.status(500).send("Erro interno ao carregar a página.");
+        }
     });
 
-    lti.app.get('/documentation', (req, res) => {
-        const documentationPath = path.join(__dirname, '../views', 'documentation.html');
+    lti.app.get('/how-use', (req, res) => {
+        const documentationPath = path.join(__dirname, '../views', 'howUse.html');
         res.sendFile(documentationPath);
     });
 }

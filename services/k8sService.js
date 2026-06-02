@@ -136,7 +136,7 @@ async function createClusterResources(clusterInfo) {
                 containers: [{
                     name: 'container',
                     image: image,
-                    imagePullPolicy: 'Always',
+                    imagePullPolicy: 'IfNotPresent', // Em prod tem que ser "Always", para sempre atualizar a imagem
                     resources: {
                         requests: {
                             cpu: '200m',

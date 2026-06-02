@@ -14,6 +14,20 @@ const selectBackup = document.getElementById('select-backup');
 
 let cacheArquivos = {}; 
 
+document.addEventListener('DOMContentLoaded', () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const ltik = urlParams.get('ltik') || window.LTI_TOKEN;
+
+    if (ltik) {
+        const links = document.querySelectorAll('a[href^="/"]');
+        links.forEach(link => {
+            const url = new URL(link.href, window.location.origin);
+            url.searchParams.set('ltik', ltik);
+            link.href = url.pathname + url.search;
+        });
+    }
+});
+
 // --- Configuração do Terminal ---
 const term = new Terminal({
     cursorBlink: true,
@@ -489,15 +503,17 @@ socket.on('session-ready', (data) => {
         const btn = document.createElement('button');
         btn.textContent = `${alias}`;
         btn.className = 'btn-machine';
+        const urlParams = new URLSearchParams(window.location.search);
 
         if (alias === targetMachine) {
           btn.disabled = true;
         }
 
         btn.onclick = () => {
-          // Pega a URL atual, limpa parâmetros velhos e adiciona o target novo
-          const novaUrl = `${window.location.pathname}?machine=${alias}`;
-          window.open(novaUrl, '_blank');
+            urlParams.set('machine', alias);
+        
+            const novaUrl = `${window.location.pathname}?${urlParams.toString()}`;
+            window.open(novaUrl, '_blank');
         };
 
         machineList.appendChild(btn);
@@ -514,6 +530,10 @@ socket.on('session-ready', (data) => {
             loadBackups();
         }
     }
+
+    const machineRaw = urlParams.get('machine') || 'Master';
+    const machine = machineRaw.charAt(0).toLocaleUpperCase() + machineRaw.slice(1).replaceAll('-', ' ');
+    document.title = `Terminal Web - ${machine}`;
 
     setTimeout(() => {
         //console.log("Terminal sincronizando dimensões:", term.cols, term.rows);
