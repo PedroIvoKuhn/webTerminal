@@ -384,4 +384,5 @@ module.exports = {
     getActiveJobs, 
     updateJobExpiration,
     connectPodToTerminal,
+    triggerPrePull,
 };
