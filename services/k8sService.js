@@ -1,5 +1,5 @@
 const k8s = require('@kubernetes/client-node');
-const { k8sApi, namespace, kc } = require('../config/kubernetes');
+const { k8sApi, namespace, kc, k8sExec } = require('../config/kubernetes');
 
 // --  Funções privadas
 
@@ -81,10 +81,20 @@ async function waitForPodRunning(name) {
     });
 }
 
-async function createClusterResources(jobId, numMachines, image, keys) {
+async function createClusterResources(clusterInfo) {
+    const { jobId, image, keys, expiresAt, numMachines, userId, activeBackupName } = clusterInfo;
     const masterPodName = `master-${jobId}`;
     const serviceName = `svc-${jobId}`;
     const secretName = `ssh-keys-${jobId}`;
+
+    try {
+        // Tenta deletar o secret se ele já existir (ignora erro se não existir)
+        await k8sApi.deleteNamespacedSecret(secretName, namespace);
+        await k8sApi.deleteNamespacedService(serviceName, namespace);
+    } catch (e) {
+        // Ignora erro 404 (Not Found), qualquer outro erro mostra no log
+        if (e.body && e.body.code !== 404) console.log("Aviso de limpeza:", e.body.message);
+    }
 
     // Cria o secret
     const sshConfig = generateSshConfig(numMachines, jobId, masterPodName, serviceName);
@@ -104,11 +114,17 @@ async function createClusterResources(jobId, numMachines, image, keys) {
     const podPromises = [];
     for (let i = 0; i < numMachines; i++) {
         const podK8sName = i === 0 ? masterPodName : `worker-${i}-${jobId}`;
-        const networkHostname = i === 0 ? `master` : `worker-${i}`;
+        const networkHostname = i === 0 ? 'master' : `worker-${i}`;
         const podManifest = {
             metadata: {
                 name: podK8sName,
-                labels: { 'job-id': jobId, 'role': i === 0 ? 'master' : 'worker' }
+                labels: { 'job-id': jobId, 'role': i === 0 ? 'master' : 'worker' },
+                annotations: {
+                  'terminalWeb/expiresAt': expiresAt.toString(),
+                  'terminalWeb/numMachines': numMachines.toString(),
+                  'terminalWeb/userId': userId.toString(),
+                  'terminalWeb/activeBackupName': activeBackupName.toString(),
+                }
             },
             spec: {
                 securityContext: {
@@ -141,7 +157,7 @@ async function createClusterResources(jobId, numMachines, image, keys) {
                 containers: [{
                     name: 'container',
                     image: image,
-                    imagePullPolicy: 'Always',
+                    imagePullPolicy: 'Always', // Em prod tem que ser "Always", para sempre atualizar a imagem
                     resources: {
                         requests: {
                             cpu: '200m',
@@ -199,7 +215,7 @@ async function cleanupJob(jobId, secretName) {
             //console.log(`Deletando Secret: ${secretName}`);
             await k8sApi.deleteNamespacedSecret(secretName, namespace);
         }
-        //console.log(`Deletando pods com label mpi-job-id=${jobId}`);
+        //console.log(`Deletando pods com label job-id=${jobId}`);
         await k8sApi.deleteCollectionNamespacedPod(
             namespace, 
             undefined,                      // pretty
@@ -269,3 +285,103 @@ async function triggerPrePull(imageName) {
 }
 
 module.exports = { waitForPodRunning, cleanupJob, createClusterResources, triggerPrePull };
+async function getActiveJobs() {
+  try {
+    const response = await k8sApi.listNamespacedPod(
+      namespace,
+      undefined, // 2. pretty
+      undefined, // 3. allowWatchBookmarks
+      undefined, // 4. _continue
+      undefined, // 5. fieldSelector
+      `role=master` // 6. labelSelector
+    );
+
+    const pods = response.body.items;
+    const activeSessionsData = [];
+
+    for (const pod of pods) {
+      const labels = pod.metadata.labels || {};
+      const annotations = pod.metadata.annotations || {};
+
+      const jobId = labels["job-id"];
+      const expiresAtStr = annotations["terminalWeb/expiresAt"];
+      const numMachinesStr =  annotations["terminalWeb/numMachines"];
+      const userId = annotations["terminalWeb/userId"];
+      const activeBackupName = annotations["terminalWeb/activeBackupName"];
+
+      if (jobId && expiresAtStr) {
+        activeSessionsData.push({
+          jobId: jobId,
+          expiresAt: parseInt(expiresAtStr, 10),
+          numMachines: parseInt(numMachinesStr, 10) || 2,
+          userId: userId,
+          activeBackupName: activeBackupName,
+        })
+      }
+    }
+    
+    return activeSessionsData;
+  } catch (error) {
+    console.error("Erro ao buscar sessões ativas no K8s:", error);
+    return [];
+  }
+}
+
+async function updateJobExpiration(jobId, newExpiresAt) {
+    try {
+        const podName = `master-${jobId}`;
+        
+        const patch = {
+            metadata: {
+                annotations: {
+                    'terminalWeb/expiresAt': newExpiresAt.toString()
+                }
+            }
+        };
+
+        const options = { 
+            headers: { 'Content-Type': 'application/strategic-merge-patch+json' } 
+        };
+
+        await k8sApi.patchNamespacedPod(
+            podName, 
+            namespace, 
+            patch, 
+            undefined, undefined, undefined, undefined, undefined, 
+            options
+        );
+        
+        console.log(`[K8s] Annotation atualizada com sucesso para o Job ${jobId}`);
+    } catch (err) {
+        console.error(`[ERRO K8s] Falha ao atualizar a expiração do Job ${jobId}:`, err);
+    }
+}
+
+async function connectPodToTerminal(
+    masterPodName, 
+    command = ['/bin/bash'], 
+    stdoutStream = process.stdout, 
+    stderrStream = process.stderr, 
+    stdinStream = process.stdin, 
+    isTty = true
+) {
+    return await k8sExec.exec(
+        namespace, 
+        masterPodName, 
+        'container', 
+        command, 
+        stdoutStream, 
+        stderrStream, 
+        stdinStream, 
+        isTty
+    );
+}
+
+module.exports = { 
+    waitForPodRunning, 
+    cleanupJob, 
+    createClusterResources, 
+    getActiveJobs, 
+    updateJobExpiration,
+    connectPodToTerminal,
+};

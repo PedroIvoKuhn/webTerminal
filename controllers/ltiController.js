@@ -5,7 +5,7 @@ const k8sService = require('../services/k8sService');
 
 // Função privada
 
-function renderTemplate(res, userName, image) {
+function renderTemplate(res, userName, image, ltiToken) {
     const templatePath = path.join(__dirname, '../views', 'index.html');
 
     fs.readFile(templatePath, 'utf8', (err, html) => {
@@ -13,6 +13,9 @@ function renderTemplate(res, userName, image) {
 
         let finalHtml = html.replace('{{NOME_USUARIO}}', userName);
         finalHtml = finalHtml.replaceAll('{{IMAGE}}', image);
+
+        const scriptToken = `<script>window.LTI_TOKEN = "${ltiToken}";</script>`;
+        finalHtml = finalHtml.replace('</head>', `${scriptToken}\n</head>`);
         res.send(finalHtml);
     });
 }
@@ -27,6 +30,11 @@ async function setup(app) {
             k8sService.triggerPrePull(image).catch(console.error);
             renderTemplate(res, userName, image);
         });
+        
+        app.get('/how-use', (req, res) => {
+            const documentationPath = path.join(__dirname, '../views', 'howUse.html');
+            res.sendFile(documentationPath);
+        });
         return;
     }
 
@@ -40,6 +48,7 @@ async function setup(app) {
             }
         },
         {
+            staticPath: path.join(__dirname, '../public'),
             cookies: {
                 secure: process.env.NODE_ENV === 'production',
                 //secure: true, // Em produção sempre true
@@ -52,6 +61,7 @@ async function setup(app) {
 
     await lti.deploy({port: process.env.PORT + 1});
     app.use(lti.app);
+    app.get('/favicon.ico', (req, res) => res.status(204).end());
 
     await lti.registerPlatform({
         url: process.env.LTI_PLATFORM_URL,
@@ -66,16 +76,49 @@ async function setup(app) {
     });
 
     lti.onConnect(async (token, req, res) => {
-        console.log('Usuário conectado:', token.user);
-        const userName = token.user.name || 'Usuário Desconhecido';
-        let image = process.env.DEFAULT_MPI_IMAGE;
- 
-        const custImagem = token.platformContext.custom ? token.platformContext.custom.imagem : undefined;
-        if (custImagem && custImagem.toLowerCase() !== 'default') {              
-            image = custImagem;
+        console.log('Usuário conectado:', token.userInfo.name , " ID:", token.user);
+        //ID para o MiniO
+        req.session.userId = token.user;
+        req.session.save();
+
+        return lti.redirect(res, "/home");
+    });
+
+    lti.onInvalidToken(async (req, res, next) => {
+        if (req.url.includes('favicon.ico') || req.url.includes('socket.io')) {
+            return next();
         }
-        k8sService.triggerPrePull(image).catch(console.error);
-        renderTemplate(res, userName, image);
+
+        console.warn(`[LTI] Tentativa de acesso bloqueada (Token Inválido ou Acesso Direto).`);
+    
+        const unauthorizedPath = path.join(__dirname, '../views', 'unauthorized.html');
+        return res.status(401).sendFile(unauthorizedPath);
+    });
+
+    lti.app.get('/home', (req, res) => {
+        const ltiToken = res.locals.token;
+        const tokenRaw = req.query.ltik;
+
+        if (!ltiToken) return res.status(401).send("Sessão LTI não encontrada.")
+
+        try {
+            const userName = ltiToken.userInfo.name || 'Usuário Desconhecido';
+            let image = process.env.DEFAULT_MPI_IMAGE;
+            const customParams = ltiToken.platformContext.custom;
+            if (customParams && customParams.imagem && customParams.imagem.toLowerCase() !== 'default') {
+                image = customParams.imagem;
+            }
+
+            renderTemplate(res, userName, image, tokenRaw);
+        } catch (err) {
+            console.error("[LTI Error] Erro ao processar template:", err);
+            res.status(500).send("Erro interno ao carregar a página.");
+        }
+    });
+
+    lti.app.get('/how-use', (req, res) => {
+        const documentationPath = path.join(__dirname, '../views', 'howUse.html');
+        res.sendFile(documentationPath);
     });
 }
 

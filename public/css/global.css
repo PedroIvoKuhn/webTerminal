@@ -1,0 +1,64 @@
+:root {
+    --azul: rgb(0, 145, 255);
+    --azul-contraste: rgb(30, 110, 244);
+    --azul-petroleo: rgb(0,195,208);
+    --azul-petroleo-contraste: rgb(0,129,152);
+    --vermelho: rgb(255, 56, 60);
+    --vermelho-contraste: rgb(233, 21, 45);
+    --verde: rgb(48, 209, 88);
+    --verde-contraste: rgb(0, 137, 50);
+    --laranja: rgb(255, 146, 48);
+    --cinza: rgb(124,124,128);
+    --cor-terminal: #1e1e1e;
+    --cinza-borda: #444;
+    --cinza-destaque: #333;
+    --cinza-claro: rgb(242,242,244);
+}
+
+body {
+    background-color: #2d2d2d;
+    color: #f1f1f1;
+    padding: 20px;
+    font-family: sans-serif;
+    margin: 0;
+}
+
+nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 60px;
+    background-color: #333;
+    color: white;
+    display: flex; 
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 30px;
+    box-sizing: border-box;
+    font-size: 1.1rem;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+    z-index: 999;
+}
+
+.nav-links {
+    margin: 0;
+    padding: 0;
+    display: flex; 
+    gap: 20px;
+}
+
+.nav-links li {
+    list-style: none;
+}
+
+.nav-links a {
+    text-decoration: none;
+    color: white;
+    font-weight: bold;
+    transition: color 0.3s;
+}
+
+.nav-links a:hover {
+    color: #3498db;
+}
