@@ -1,124 +1,123 @@
-const { execSync } = require("child_process");
+require('dotenv').config();
+const { execSync } = require('child_process');
 const os = require('os');
 
 const awsBurster = require('./cloud/awsService');
 const azureBurster = require('./cloud/azureService');
 
-const delay = (ms) => new Promise(res => setTimeout(res, ms));
+const providers = {
+    AWS: awsBurster,
+    AZURE: azureBurster
+};
 
-function validateCredentials(provider) {
-    if (provider === 'AZURE') {
-        if (!process.env.AZURE_TENANT_ID || !process.env.AZURE_CLIENT_ID) {
-            console.error("[ERRO] Credenciais do Azure não encontradas no arquivo .env");
-            process.exit(1);
-        }
-        return azureBurster;
+/**
+ * Obtém o módulo burster do provedor especificado
+ */
+function resolveProvider(providerName) {
+    const name = (providerName || process.env.CLOUD_PROVIDER || 'AWS').toUpperCase();
+    const burster = providers[name];
+
+    if (!burster) {
+        throw new Error(`Provedor de nuvem desconhecido ou não suportado: ${providerName}`);
     }
 
-    if (!process.env.AWS_ACCESS_KEY_ID || !process.env.AWS_SECRET_ACCESS_KEY) {
-        console.error("[ERRO] Credenciais da AWS não encontradas no arquivo .env");
-        process.exit(1);
-    }
-    return awsBurster;
+    return { name, module: burster };
 }
 
+/**
+ * Valida as credenciais da nuvem antes de tentar qualquer operação
+ * @param {string} provider - 'AWS' | 'AZURE'
+ * @param {Object} credentials - Objeto com as credenciais
+ */
+async function validateCredentials(provider, credentials = {}) {
+    const { name, module } = resolveProvider(provider);
+    return await module.validateCredentials(credentials);
+}
+
+/**
+ * Gera o comando de join do MicroK8s substituindo pelo IP da interface Tailscale
+ */
 function generateJoinCommand() {
-    console.log("Gerando token de join do MicroK8s no cluster local...");
+    console.log("[BURST] Gerando token de join do MicroK8s local...");
     const addNodeOutput = execSync('microk8s add-node').toString();
 
-    // linha de comando que o worker precisa rodar
     const match = addNodeOutput.match(/microk8s join [^\n|\\]+/);
     if (!match) {
-        throw new Error("Não foi possível gerar um comando de join válido para o cluster a partir do output: " + addNodeOutput);
+        throw new Error("Não foi possível gerar um comando de join válido: " + addNodeOutput);
     }
 
     let joinCommand = "sudo " + match[0].trim();
     const interfaces = os.networkInterfaces();
 
     if (interfaces['tailscale0']) {
-        const tailscaleIp = interfaces['tailscale0'].find(i => i.family === 'IPv4' || i.family === 4).address;
-        joinCommand = joinCommand.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/, tailscaleIp);
+        const tailscaleIp = interfaces['tailscale0'].find(i => i.family === 'IPv4' || i.family === 4)?.address;
+        if (tailscaleIp) {
+            joinCommand = joinCommand.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/, tailscaleIp);
+        }
     }
 
     return joinCommand;
 }
 
-async function main() {
-    console.log("=========================================");
-    console.log("   MECANISMO DE CLOUD BURSTING");
-    console.log("=========================================\n");
+/**
+ * Provisiona um novo nó na nuvem informada usando as credenciais passadas
+ * @param {Object} options
+ * @param {string} options.provider - 'AWS' | 'AZURE'
+ * @param {Object} options.credentials - Credenciais da nuvem da sessão
+ * @param {string} [options.customJoinCommand] - Comando de join pré-gerado (opcional)
+ */
+async function addNode({ provider, credentials, customJoinCommand } = {}) {
+    const { name, module } = resolveProvider(provider);
 
-    const provider = (process.env.CLOUD_PROVIDER || 'AWS').toUpperCase();
-    console.log(`[INFO] Provedor de Nuvem selecionado: ${provider}\n`);
-
-    const burster = validateCredentials(provider);    
-    let clusterNodes = [];
-
-    try {
-        console.log(">>> PICO DE DEMANDA DETECTADO <<<");
-        console.log("Adicionando recursos na nuvem pública...\n");
-
-        
-        const joinCommand = generateJoinCommand();
-        console.log("Comando de join gerado:", joinCommand);
-
-        // 1 nova máquina passando o comando dinâmico
-        const newNodeId = await burster.addNode(joinCommand);
-
-        console.log("\nAguardando 10 segundos para a máquina iniciar...");
-        await delay(10000); // Aguarda a API da aws atualizar os estados
-
-        // Lista as maquinas no ar
-        console.log("\n-> Verificando status do cluster na AWS...");
-        clusterNodes = await burster.listBurstNodes();
-
-        console.log("==== NÓS ATUAIS ====");
-        console.table(clusterNodes);
-        console.log("====================\n");
-
-        console.log("\n>>> MÁQUINA INICIADA E PROCESSO ALOCADO <<<");
-        console.log("O nó está operando na nuvem. Pressione 'y' e dê Enter para simular o fim da demanda e matar a máquina...");
-
-        const readline = require('readline').createInterface({
-            input: process.stdin,
-            output: process.stdout
-        });
-
-        await new Promise(resolve => {
-            readline.on('line', (input) => {
-                if (input.toLowerCase().trim() === 'y') {
-                    resolve();
-                } else {
-                    console.log("Comando não reconhecido. Digite 'y' e Enter para finalizar a máquina.");
-                }
-            });
-        });
-        readline.close();
-
-        console.log("\n>>> DEMANDA NORMALIZADA <<<");
-        console.log("Removendo recursos excedentes do Cluster e da AWS...\n");
-
-        // qual nó no K8S para dar DELETE
-        clusterNodes = await burster.listBurstNodes();
-        const nodeToKill = clusterNodes.find(n => n.id === newNodeId);
-        if (nodeToKill && nodeToKill.privateDns) {
-            console.log(`Removendo Node (${nodeToKill.privateDns}) do Microk8s...`);
-            try {
-                execSync(`microk8s kubectl delete node ${nodeToKill.privateDns}`);
-                console.log("[SUCESSO] Nó ejetado do Kubernetes local e workloads evacuados.");
-            } catch (e) {
-                console.log("[AVISO] Não foi possivel excluir o nó do MicroK8s (talvez ainda não tivesse sincronizado): " + e.message);
-            }
-        }
-
-        // Destruir a máquina EC2 chamando o método
-        await burster.removeNode(newNodeId);
-
-        console.log("\nBurst finalizado e recursos removidos com sucesso!");
-
-    } catch (error) {
-        console.error("\n[ERRO CRÍTICO] Falha durante a operação de burst:", error);
+    // Validação prévia de credenciais
+    const authCheck = await module.validateCredentials(credentials);
+    if (!authCheck.valid) {
+        throw new Error(`[BURST AUTH ERRO] Falha na validação das credenciais na ${name}: ${authCheck.error}`);
     }
+
+    const joinCommand = customJoinCommand || generateJoinCommand();
+    console.log(`[BURST] Adicionando nó na nuvem ${name}...`);
+
+    const nodeId = await module.addNode(joinCommand, credentials);
+
+    return {
+        nodeId,
+        provider: name
+    };
 }
 
-module.exports = { validateCredentials };
+/**
+ * Remove o nó do Kubernetes e destrói o recurso na nuvem
+ */
+async function removeNode({ nodeId, provider, credentials, privateDnsOrHost } = {}) {
+    const { name, module } = resolveProvider(provider);
+
+    if (privateDnsOrHost) {
+        console.log(`[BURST] Ejetando nó (${privateDnsOrHost}) do Kubernetes local...`);
+        try {
+            execSync(`microk8s kubectl delete node ${privateDnsOrHost}`);
+            console.log("[BURST] Nó excluído com sucesso do MicroK8s.");
+        } catch (e) {
+            console.warn(`[BURST AVISO] Não foi possível remover nó do Kubernetes: ${e.message}`);
+        }
+    }
+
+    console.log(`[BURST] Destruindo instância ${nodeId} na ${name}...`);
+    return await module.removeNode(nodeId, credentials);
+}
+
+/**
+ * Lista todos os nós de burst ativos na nuvem informada
+ */
+async function listBurstNodes({ provider, credentials } = {}) {
+    const { module } = resolveProvider(provider);
+    return await module.listBurstNodes(credentials);
+}
+
+module.exports = {
+    validateCredentials,
+    addNode,
+    removeNode,
+    listBurstNodes,
+    generateJoinCommand
+};
