@@ -76,39 +76,87 @@ async function ensureInfrastructure(ctx) {
 
 function buildUserDataScript(joinCommand = '', tailscaleKey = process.env.TAILSCALE_AUTH_KEY) {
     let script = `#!/bin/bash
-sudo apt-get update -y
-sudo apt-get install -y curl
+exec > /var/log/burst-init.log 2>&1
+set -x
+
+echo "=== INICIANDO CONFIGURACAO DO BURST NODE ==="
+date
+
+# Aguarda eventuais locks do apt da inicialização do Ubuntu
+while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
+    echo "Aguardando lock do apt ser liberado..."
+    sleep 3
+done
+
+apt-get update -y
+apt-get install -y curl
 
 # --- Instalando e Configurando o Tailscale ---
+echo "--- Instalando Tailscale ---"
 curl -fsSL https://tailscale.com/install.sh | sh
 `;
 
     if (tailscaleKey) {
-        script += `sudo tailscale up --authkey=${tailscaleKey} --accept-routes --ssh\n`;
+        script += `tailscale up --authkey=${tailscaleKey} --accept-routes --ssh\n`;
+        script += `
+# Aguarda IP do Tailscale ser configurado na interface
+TS_IP=""
+for i in {1..30}; do
+    TS_IP=$(tailscale ip -4 || true)
+    if [ -n "$TS_IP" ]; then
+        echo "Tailscale conectado com IP: $TS_IP"
+        break
+    fi
+    sleep 2
+done
+`;
     }
 
     if (joinCommand) {
-        script += `\n# --- Instalando o MicroK8s ---\n`;
-        script += `sudo snap install microk8s --classic --channel=1.32/stable\n`;
-        script += `sudo usermod -aG microk8s ubuntu\n`;
-        script += `sudo microk8s status --wait-ready\n`;
-        script += `mkdir -p /home/ubuntu/.kube\n`;
-        script += `sudo chown -f -R ubuntu /home/ubuntu/.kube\n`;
-
-        script += `\n# --- Injetando Comando do Cluster Local ---\n`;
-        script += `echo "--- INICIANDO JOIN COM MICROK8S ---"\n`;
         let finalJoin = joinCommand.includes('--worker') ? joinCommand : `${joinCommand} --worker`;
-        script += `${finalJoin}\n`;
-        script += `echo "--- JOIN FINALIZADO ---"\n`;
+        script += `
+# --- Instalando o MicroK8s ---
+echo "--- Instalando MicroK8s snap ---"
+for i in {1..5}; do
+    snap install microk8s --classic --channel=1.32/stable && break || sleep 5
+done
+
+usermod -aG microk8s ubuntu
+microk8s status --wait-ready
+
+# Configura o kubelet para anunciar explicitamente o IP do Tailscale ao cluster
+if [ -n "$TS_IP" ]; then
+    echo "Configurando --node-ip=$TS_IP no kubelet..."
+    echo "--node-ip=$TS_IP" >> /var/snap/microk8s/current/args/kubelet
+    systemctl restart snap.microk8s.daemon-kubelet || true
+    sleep 5
+fi
+
+mkdir -p /home/ubuntu/.kube
+chown -f -R ubuntu:ubuntu /home/ubuntu/.kube || true
+
+# --- Injetando Comando do Cluster Local ---
+echo "--- INICIANDO JOIN COM MICROK8S ---"
+date
+for i in {1..5}; do
+    echo "Tentativa $i de join..."
+    ${finalJoin} && break || sleep 5
+done
+
+echo "--- JOIN FINALIZADO ---"
+date
+`;
     }
 
     return Buffer.from(script).toString('base64');
 }
 
-async function addNode(joinCommand = '', credentials = {}) {
+async function addNode(joinCommand = '', credentials = {}, options = {}) {
+    const { onProgress, tags = {} } = options;
     const ctx = getAzureContext(credentials);
 
     console.log("-> Garantindo infraestrutura básica (RG, VNet, Subnet) na Azure...");
+    if (onProgress) onProgress(2, "Garantindo infraestrutura básica (RG, VNet, Subnet) na Azure...");
     await ensureInfrastructure(ctx);
 
     const nodeId = `burst-node-${Date.now()}`;
@@ -136,8 +184,16 @@ async function addNode(joinCommand = '', credentials = {}) {
 
     const encodedUserData = buildUserDataScript(joinCommand, credentials.tailscaleAuthKey);
     console.log(`-> Criando Máquina Virtual: ${nodeId}...`);
+    if (onProgress) onProgress(2, `Criando Máquina Virtual ${nodeId} na Azure...`);
     
     const adminPassword = `Burst@${Math.random().toString(36).slice(2)}${Date.now()}!`;
+
+    const vmTags = {
+        Role: "CloudBurstingWorker",
+        ManagedBy: "TerminalWeb"
+    };
+    if (tags.jobId) vmTags.JobId = String(tags.jobId);
+    if (tags.socketId) vmTags.SocketId = String(tags.socketId);
 
     const vmParameters = {
         location: ctx.location,
@@ -169,14 +225,13 @@ async function addNode(joinCommand = '', credentials = {}) {
         networkProfile: {
             networkInterfaces: [{ id: nic.id, primary: true }]
         },
-        tags: {
-            Role: "CloudBurstingWorker"
-        }
+        tags: vmTags
     };
 
     try {
         await ctx.computeClient.virtualMachines.beginCreateOrUpdateAndWait(ctx.resourceGroupName, nodeId, vmParameters);
         console.log(`[SUCESSO] Instância Azure criada! ID/Nome: ${nodeId}`);
+        if (onProgress) onProgress(3, `Instância criada (${nodeId}). Conectando via Tailscale e iniciando MicroK8s...`);
         return nodeId;
     } catch (error) {
         console.error("[ERRO] Falha ao criar a instância no Azure:", error);

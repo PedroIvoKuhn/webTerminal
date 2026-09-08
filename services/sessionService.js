@@ -1,5 +1,6 @@
 const k8sService = require('./k8sService');
 const minioService = require('./minioService');
+const cloudBurstingService = require('./cloudBurstingService');
 
 // Configurações de Tempo (em milissegundos)
 /*
@@ -10,14 +11,55 @@ const WARNING_BEFORE =  20 * 60 * 1000;              // 55 Segundos antes de aca
 const INITIAL_DURATION = 2 * 60 * 60 * 1000;  // 2 Horas
 const WARNING_BEFORE = 20 * 60 * 1000;        // 20 Minutos antes de acabar
 // */
-// Armazena os timers ativos: { jobId: { killTimer, warnTimer, expiresAt } }
+// Armazena os timers ativos: { jobId: { killTimer, warnTimer, expiresAt, burstNodes } }
 const activeSessions = {};
+
+// Armazena nós de burst provisionados antes de iniciar a sessão (indexados por socket.id)
+const pendingBursts = {};
+
+function registerPendingBurst(socketId, burstInfo) {
+    if (!pendingBursts[socketId]) {
+        pendingBursts[socketId] = [];
+    }
+    pendingBursts[socketId].push(burstInfo);
+}
+
+function getPendingBursts(socketId) {
+    return pendingBursts[socketId] || [];
+}
+
+async function cleanupPendingBurst(socketId) {
+    const bursts = pendingBursts[socketId];
+    if (bursts && bursts.length > 0) {
+        console.log(`[BURST] Limpando nó(s) de burst pendente(s) para socket ${socketId}...`);
+        for (const burst of bursts) {
+            try {
+                await cloudBurstingService.removeNode(burst);
+            } catch (err) {
+                console.error(`[BURST] Erro ao limpar nó pendente:`, err.message);
+            }
+        }
+        delete pendingBursts[socketId];
+    }
+}
+
+function registerBurstNode(jobId, burstInfo) {
+    const session = activeSessions[jobId];
+    if (session) {
+        if (!session.burstNodes) session.burstNodes = [];
+        session.burstNodes.push(burstInfo);
+    }
+}
 
 function startSession(jobId, socket, numMachines, userId, backupName) {
     const now = Date.now();
     const expiresAt = now + INITIAL_DURATION;
     
     console.log(`[SESSION] Iniciando monitoramento para ${jobId}. Expira em: ${new Date(expiresAt).toLocaleTimeString()}`);
+
+    // Vincula quaisquer nós de burst provisionados antes da inicialização do terminal
+    const sessionBurstNodes = pendingBursts[socket.id] || [];
+    delete pendingBursts[socket.id];
 
     // Salva os dados da sessão
     activeSessions[jobId] = {
@@ -26,6 +68,7 @@ function startSession(jobId, socket, numMachines, userId, backupName) {
         expiresAt: expiresAt,
         userId: userId,
         activeBackupName: backupName,
+        burstNodes: sessionBurstNodes,
         // 1. Timer do Aviso
         warnTimer: setTimeout(() => {
             sendWarning(jobId);
@@ -122,6 +165,18 @@ async function terminateSession(jobId) {
           }
         }
 
+        if (session && session.burstNodes && session.burstNodes.length > 0) {
+          console.log(`[BURST] Encerrando ${session.burstNodes.length} nó(s) de burst da sessão ${jobId}...`);
+          for (const burstNode of session.burstNodes) {
+            try {
+              await cloudBurstingService.removeNode(burstNode);
+              console.log(`[BURST] Nó ${burstNode.nodeId} destruído com sucesso.`);
+            } catch (burstErr) {
+              console.error(`[BURST] Erro ao destruir nó de burst ${burstNode.nodeId}:`, burstErr.message);
+            }
+          }
+        }
+
         await k8sService.cleanupJob(jobId, secretName);
         console.log(`[SESSION] K8s limpo com sucesso para ${jobId}.`);
     } catch (err) {
@@ -156,6 +211,7 @@ async function syncSessionsK8s() {
         numMachines: session.numMachines,
         userId: session.userId,
         activeBackupName: session.activeBackupName,
+        burstNodes: [],
         sockets: new Set(),
         
         killTimer: setTimeout(() => {
@@ -181,4 +237,15 @@ function removeSocket(jobId, socketToRemove) {
   }
 }
 
-module.exports = { startSession, extendSession, restoreSession, terminateSession, syncSessionsK8s, removeSocket };
+module.exports = { 
+    startSession, 
+    extendSession, 
+    restoreSession, 
+    terminateSession, 
+    syncSessionsK8s, 
+    removeSocket,
+    registerPendingBurst,
+    getPendingBursts,
+    cleanupPendingBurst,
+    registerBurstNode
+};

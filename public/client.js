@@ -660,3 +660,139 @@ const AppModal = {
     alert: (title, message) => AppModal.show({ title, message, type: 'alert' }),
     confirm: (title, message) => AppModal.show({ title, message, type: 'confirm', confirmText: 'Sim', cancelText: 'Não' })
 };
+
+// --- CLOUD BURSTING ---
+const btnBursting = document.getElementById('bursting');
+const burstModal = document.getElementById('burst-modal');
+const burstProviderBadge = document.getElementById('burst-provider-badge');
+const burstConsoleOutput = document.getElementById('burst-console-output');
+const btnBurstFinish = document.getElementById('btn-burst-finish');
+const btnBurstCancel = document.getElementById('btn-burst-cancel');
+
+let currentBurstStep = 1;
+let isBurstConnected = false;
+
+// Solicita informações do provedor ativo para atualizar a badge
+socket.emit('burst:get-info');
+socket.on('burst:info', ({ provider }) => {
+    if (burstProviderBadge) {
+        burstProviderBadge.textContent = provider || 'NUVEM';
+    }
+});
+
+function logBurstConsole(msg) {
+    if (!burstConsoleOutput) return;
+    const time = new Date().toLocaleTimeString();
+    burstConsoleOutput.textContent += `\n[${time}] ${msg}`;
+    burstConsoleOutput.scrollTop = burstConsoleOutput.scrollHeight;
+}
+
+function setBurstStep(stepNumber, state) {
+    // state: 'pending' | 'active' | 'success' | 'error'
+    const stepEl = document.getElementById(`burst-step-${stepNumber}`);
+    if (!stepEl) return;
+
+    stepEl.classList.remove('step-pending', 'step-active', 'step-success', 'step-error');
+    stepEl.classList.add(`step-${state}`);
+
+    const numberSpan = stepEl.querySelector('.step-number');
+    const spinnerSpan = stepEl.querySelector('.step-spinner');
+
+    if (state === 'active') {
+        if (numberSpan) numberSpan.style.display = 'none';
+        if (spinnerSpan) spinnerSpan.style.display = 'inline-block';
+    } else if (state === 'success') {
+        if (numberSpan) {
+            numberSpan.style.display = 'inline-block';
+            numberSpan.textContent = '✓';
+        }
+        if (spinnerSpan) spinnerSpan.style.display = 'none';
+    } else if (state === 'error') {
+        if (numberSpan) {
+            numberSpan.style.display = 'inline-block';
+            numberSpan.textContent = '✗';
+        }
+        if (spinnerSpan) spinnerSpan.style.display = 'none';
+    } else {
+        if (numberSpan) {
+            numberSpan.style.display = 'inline-block';
+            numberSpan.textContent = String(stepNumber);
+        }
+        if (spinnerSpan) spinnerSpan.style.display = 'none';
+    }
+}
+
+function resetBurstModal() {
+    for (let i = 1; i <= 4; i++) {
+        setBurstStep(i, i === 1 ? 'active' : 'pending');
+    }
+    if (burstConsoleOutput) {
+        burstConsoleOutput.textContent = 'Iniciando expansão do cluster com as credenciais do ambiente...';
+    }
+    if (btnBurstFinish) btnBurstFinish.style.display = 'none';
+    if (btnBurstCancel) btnBurstCancel.style.display = 'none';
+}
+
+if (btnBursting) {
+    btnBursting.addEventListener('click', () => {
+        if (isBurstConnected) {
+            AppModal.alert('Nuvem Externa', 'O nó na nuvem já está conectado e pronto para receber cargas no cluster!');
+            return;
+        }
+
+        resetBurstModal();
+        if (burstModal) burstModal.style.display = 'flex';
+        socket.emit('burst:start');
+    });
+}
+
+if (btnBurstFinish) {
+    btnBurstFinish.addEventListener('click', () => {
+        if (burstModal) burstModal.style.display = 'none';
+    });
+}
+
+if (btnBurstCancel) {
+    btnBurstCancel.addEventListener('click', () => {
+        if (burstModal) burstModal.style.display = 'none';
+    });
+}
+
+socket.on('burst:step', ({ step, message }) => {
+    currentBurstStep = step;
+    logBurstConsole(message);
+
+    // Marca todos os passos anteriores como sucesso
+    for (let i = 1; i < step; i++) {
+        setBurstStep(i, 'success');
+    }
+    // Marca o passo atual como ativo
+    setBurstStep(step, 'active');
+});
+
+socket.on('burst:complete', ({ nodeId, provider }) => {
+    isBurstConnected = true;
+    for (let i = 1; i <= 4; i++) {
+        setBurstStep(i, 'success');
+    }
+    logBurstConsole(`✅ Sucesso! Nó ${nodeId} (${provider}) integrado ao cluster MicroK8s.`);
+
+    if (btnBurstFinish) btnBurstFinish.style.display = 'inline-block';
+    if (btnBurstCancel) btnBurstCancel.style.display = 'none';
+
+    if (btnBursting) {
+        btnBursting.textContent = '☁️ Nuvem Conectada';
+        btnBursting.classList.add('connected');
+    }
+});
+
+socket.on('burst:error', ({ message }) => {
+    setBurstStep(currentBurstStep, 'error');
+    logBurstConsole(`❌ ERRO: ${message}`);
+
+    if (btnBurstCancel) {
+        btnBurstCancel.style.display = 'inline-block';
+        btnBurstCancel.textContent = 'Fechar';
+    }
+    if (btnBurstFinish) btnBurstFinish.style.display = 'none';
+});

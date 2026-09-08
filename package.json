@@ -11,6 +11,12 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@aws-sdk/client-ec2": "^3.1128.0",
+    "@aws-sdk/client-sts": "^3.1128.0",
+    "@azure/arm-compute": "^24.1.0",
+    "@azure/arm-network": "^36.0.0",
+    "@azure/arm-resources": "^7.0.0",
+    "@azure/identity": "^4.13.1",
     "@kubernetes/client-node": "^0.18.1",
     "body-parser": "^1.20.2",
     "cookie": "^1.0.2",

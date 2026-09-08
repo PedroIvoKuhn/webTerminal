@@ -2,6 +2,7 @@ const k8sService = require('./k8sService');
 const sshService = require('./sshService');
 const minioService = require('./minioService');
 const sessionService = require('./sessionService');
+const cloudBurstingService = require('./cloudBurstingService');
 
 module.exports = (io) => {
     io.on('connection', (socket) => {
@@ -142,6 +143,15 @@ module.exports = (io) => {
             await sessionService.terminateSession(jobId);
         });
 
+        socket.on('burst:get-info', () => {
+            const provider = (process.env.CLOUD_PROVIDER || 'AWS').toUpperCase();
+            socket.emit('burst:info', { provider });
+        });
+
+        socket.on('burst:start', async () => {
+            await handleSessionBurst(socket);
+        });
+
         socket.on("disconnect", async () => {
             const { jobId, execWs } = socket.data;
 
@@ -154,9 +164,12 @@ module.exports = (io) => {
                 console.log(`[Socket] Conexão K8s-Exec fechada junto com o socket`);
             }
 
-            if (!jobId) return;
-
-            sessionService.removeSocket(jobId, socket);
+            if (jobId) {
+                sessionService.removeSocket(jobId, socket);
+            } else {
+                // Limpa quaisquer nós de burst se o usuário fechar a página antes de iniciar o terminal
+                await sessionService.cleanupPendingBurst(socket.id);
+            }
         });
     });
 };
@@ -218,4 +231,52 @@ async function handlePodError(err, socket, jobId, secretName) {
     console.error('Erro no ciclo de vida do Pod:', err);
     socket.emit('output', `\r\n[ERRO DO BACKEND]: ${err.message}\r\nIniciando limpeza...`);
     await k8sService.cleanupJob(jobId, secretName);
+}
+
+async function handleSessionBurst(socket) {
+    if (socket.data.isBursting) {
+        socket.emit('burst:step', { step: 1, message: 'Operação de bursting já está em andamento.' });
+        return;
+    }
+
+    const provider = (process.env.CLOUD_PROVIDER || 'AWS').toUpperCase();
+    socket.data.isBursting = true;
+
+    try {
+        console.log(`[Socket ${socket.id}] Iniciando solicitação de Cloud Bursting para ${provider}...`);
+        socket.emit('burst:step', { step: 1, message: `Iniciando validação para nuvem ${provider}...` });
+
+        const result = await cloudBurstingService.addNode({
+            provider,
+            tags: {
+                socketId: socket.id,
+                jobId: socket.data.jobId || `pending-${socket.id}`
+            },
+            onProgress: (step, message) => {
+                socket.emit('burst:step', { step, message });
+            }
+        });
+
+        // Se o usuário já tiver uma sessão ativa vincula ao JobId
+        if (socket.data.jobId) {
+            sessionService.registerBurstNode(socket.data.jobId, result);
+        } else {
+            // Caso contrário, registra como pendente no socket.id
+            sessionService.registerPendingBurst(socket.id, result);
+        }
+
+        socket.data.hasBurstNode = true;
+        socket.emit('burst:complete', {
+            nodeId: result.nodeId,
+            provider: result.provider
+        });
+        console.log(`[Socket ${socket.id}] Cloud Bursting concluído com sucesso. NodeId: ${result.nodeId}`);
+    } catch (err) {
+        console.error(`[Socket ${socket.id}] Erro no Cloud Bursting:`, err.message);
+        socket.emit('burst:error', {
+            message: err.message || 'Erro desconhecido ao provisionar nó na nuvem.'
+        });
+    } finally {
+        socket.data.isBursting = false;
+    }
 }
